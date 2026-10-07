@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Java 8 Workbench</title>
+    <style>
+        :root { color-scheme: light; }
+        body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f4f6f8; color: #1d2a33; }
+        header { background: #1f4e79; color: #fff; padding: 20px 28px; }
+        header p { margin: 6px 0 0; opacity: 0.9; }
+        main { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 20px 28px 40px; }
+        section { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 16px; }
+        h2 { margin-top: 0; font-size: 18px; }
+        label { display: block; font-size: 12px; font-weight: bold; margin: 10px 0 4px; }
+        input, select, textarea, button { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+        textarea { min-height: 70px; }
+        button { background: #1f4e79; color: #fff; border: 0; border-radius: 4px; cursor: pointer; margin-top: 12px; }
+        button.secondary { background: #5b6b7a; }
+        button.danger { background: #a32020; }
+        .row { display: flex; gap: 8px; }
+        .row > * { flex: 1; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #e6edf3; vertical-align: top; font-size: 14px; }
+        tr.selected { background: #e8f1fb; }
+        .status { font-weight: bold; }
+        .muted { color: #5b6b7a; font-size: 13px; }
+        .error { color: #a32020; min-height: 18px; }
+        @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Field Workbench</h1>
+    <p>Java 8 / Spring Boot 2.7 sample. Seeded orders: <span th:text="${orderCount}">0</span></p>
+</header>
+<main>
+    <section>
+        <h2>Create order</h2>
+        <label>Title</label>
+        <input id="title" placeholder="What needs doing?"/>
+        <label>Owner</label>
+        <input id="owner" placeholder="Technician"/>
+        <label>Location</label>
+        <input id="location" placeholder="Building / gate"/>
+        <label>Description</label>
+        <textarea id="description" placeholder="Details"></textarea>
+        <button type="button" onclick="createOrder()">Create</button>
+        <p id="formError" class="error"></p>
+
+        <h2>Filter</h2>
+        <label>Owner contains</label>
+        <input id="filterOwner" oninput="loadOrders()"/>
+        <label>Status</label>
+        <select id="filterStatus" onchange="loadOrders()">
+            <option value="">All</option>
+            <option>OPEN</option>
+            <option>ASSIGNED</option>
+            <option>IN_PROGRESS</option>
+            <option>DONE</option>
+            <option>CANCELLED</option>
+        </select>
+    </section>
+    <section>
+        <h2>Orders</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Owner</th>
+                <th>Status</th>
+            </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+        </table>
+        <div id="detail"></div>
+    </section>
+</main>
+<script>
+    var selectedId = null;
+
+    function api(path, options) {
+        return fetch(path, options).then(function (res) {
+            if (res.status === 204) {
+                return null;
+            }
+            return res.json().then(function (body) {
+                if (!res.ok) {
+                    throw new Error(body.message || res.statusText);
+                }
+                return body;
+            });
+        });
+    }
+
+    function createOrder() {
+        document.getElementById("formError").textContent = "";
+        api("/api/orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                title: document.getElementById("title").value,
+                owner: document.getElementById("owner").value,
+                location: document.getElementById("location").value,
+                description: document.getElementById("description").value
+            })
+        }).then(function (order) {
+            selectedId = order.id;
+            document.getElementById("title").value = "";
+            document.getElementById("description").value = "";
+            loadOrders();
+        }).catch(function (err) {
+            document.getElementById("formError").textContent = err.message;
+        });
+    }
+
+    function loadOrders() {
+        var owner = document.getElementById("filterOwner").value;
+        var status = document.getElementById("filterStatus").value;
+        var url = "/api/orders";
+        var query = [];
+        if (owner) query.push("owner=" + encodeURIComponent(owner));
+        if (status) query.push("status=" + encodeURIComponent(status));
+        if (query.length) url += "?" + query.join("&");
+        api(url).then(function (orders) {
+            var rows = document.getElementById("rows");
+            rows.innerHTML = "";
+            orders.forEach(function (order) {
+                var tr = document.createElement("tr");
+                if (order.id === selectedId) tr.className = "selected";
+                tr.innerHTML = "<td>" + order.id + "</td><td>" + escapeHtml(order.title) + "</td><td>"
+                    + escapeHtml(order.owner) + "</td><td class='status'>" + order.status + "</td>";
+                tr.onclick = function () {
+                    selectedId = order.id;
+                    loadOrders();
+                };
+                rows.appendChild(tr);
+            });
+            if (selectedId) {
+                return api("/api/orders/" + selectedId).then(renderDetail);
+            }
+            document.getElementById("detail").innerHTML = "<p class='muted'>Select a row.</p>";
+        }).catch(function (err) {
+            document.getElementById("detail").innerHTML = "<p class='error'>" + escapeHtml(err.message) + "</p>";
+        });
+    }
+
+    function renderDetail(order) {
+        var notes = (order.notes || []).map(function (note) {
+            return "<li><strong>" + escapeHtml(note.author) + "</strong> "
+                + escapeHtml(note.recordedAt) + " — " + escapeHtml(note.text) + "</li>";
+        }).join("");
+        document.getElementById("detail").innerHTML =
+            "<h2>Order " + order.id + "</h2>"
+            + "<p>" + escapeHtml(order.description || "") + "</p>"
+            + "<p class='muted'>" + escapeHtml(order.location) + " · updated "
+            + escapeHtml(String(order.updatedAt)) + "</p>"
+            + "<div class='row'>"
+            + "<div><label>Move status</label><select id='nextStatus'>"
+            + statusOptions(order.status)
+            + "</select><button type='button' onclick='changeStatus(" + order.id + ")'>Update status</button></div>"
+            + "<div><label>Note</label><input id='noteText' placeholder='Add a note'/>"
+            + "<button class='secondary' type='button' onclick='addNote(" + order.id + ")'>Add note</button></div>"
+            + "</div>"
+            + "<button class='danger' type='button' onclick='removeOrder(" + order.id + ")'>Delete order</button>"
+            + "<ul>" + notes + "</ul>";
+    }
+
+    function statusOptions(current) {
+        var all = ["OPEN", "ASSIGNED", "IN_PROGRESS", "DONE", "CANCELLED"];
+        return all.map(function (s) {
+            return "<option" + (s === current ? " selected" : "") + ">" + s + "</option>";
+        }).join("");
+    }
+
+    function changeStatus(id) {
+        api("/api/orders/" + id + "/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: document.getElementById("nextStatus").value })
+        }).then(function () { loadOrders(); });
+    }
+
+    function addNote(id) {
+        api("/api/orders/" + id + "/notes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ author: "browser", text: document.getElementById("noteText").value })
+        }).then(function () { loadOrders(); });
+    }
+
+    function removeOrder(id) {
+        api("/api/orders/" + id, { method: "DELETE" }).then(function () {
+            selectedId = null;
+            loadOrders();
+        });
+    }
+
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    loadOrders();
+</script>
+</body>
+</html>
